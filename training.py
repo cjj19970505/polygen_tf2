@@ -6,7 +6,7 @@ from itertools import chain
 from tqdm import tqdm
 from datetime import datetime
 
-# tf.config.run_functions_eagerly(True)
+tf.config.run_functions_eagerly(True)
 # tf.data.experimental.enable_debug_mode()
 
 log_dir = "logs/" + datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -67,7 +67,7 @@ vertex_model = modules.VertexModel(
 )
 
 face_model_dataset = data_utils.make_face_model_dataset(
-    synthetic_dataset, apply_random_shift=False
+    synthetic_dataset ,apply_random_shift=False, shuffle_vertices=False
 )
 face_model_dataset = face_model_dataset.repeat()
 face_model_dataset = face_model_dataset.padded_batch(
@@ -112,7 +112,7 @@ face_model = modules.FaceModel(
 
 learning_rate = 5e-4
 training_steps = 500
-check_step = 25
+check_step = 50
 
 optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
 
@@ -184,13 +184,6 @@ for vertex_model_batch, face_model_batch, step in zip(
             only_return_complete=False,
         )
 
-        face_samples_with_true_vertex = face_model.sample(
-            context=face_model_batch,
-            max_sample_length=500,
-            top_p=0.95,
-            only_return_complete=False,
-        )
-
         mesh_list = []
         for n in range(4):
             mesh_list.append(
@@ -203,21 +196,7 @@ for vertex_model_batch, face_model_batch, step in zip(
             )
         meshes_plot = data_utils.plot_meshes(mesh_list, ax_lims=0.5)
         with file_writer.as_default():
-            tf.summary.image("sampled_vertex_inputs", meshes_plot[None], step=step)
-
-        mesh_list = []
-        for n in range(4):
-            mesh_list.append(
-                {
-                    'vertices': face_model_batch['vertices'][n][:face_model_batch['num_vertices'][n].numpy()].numpy(),
-                    'faces': data_utils.unflatten_faces(
-                        face_samples_with_true_vertex['faces'][n][:face_samples_with_true_vertex['num_face_indices'][n].numpy()].numpy()
-                    )
-                }
-            )
-        meshes_plot = data_utils.plot_meshes(mesh_list, ax_lims=0.5)
-        with file_writer.as_default():
-            tf.summary.image("true_vertex_inputs", meshes_plot[None], step=step)
+            tf.summary.image("mesh_plots", meshes_plot[None], step=step)
     
     pbar.update()
         

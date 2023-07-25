@@ -377,7 +377,7 @@ class VertexModel(tf.Module):
         num_vertices = tf.math.floordiv(stop_index, 3)
 
         # Convert to 3D vertices by reshaping and re-ordering x -> y -> z
-        v = v[:, : (tf.reduce_max(num_vertices) * 3)]
+        v = v[:, : (tf.reduce_max(num_vertices) * 3)] - 1
         verts_dequantized = dequantize_verts(v, self.quantization_bits)
         vertices = tf.reshape(verts_dequantized, [num_samples, -1, 3])
         vertices = tf.stack(
