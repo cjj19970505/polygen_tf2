@@ -104,6 +104,7 @@ class TransformerDecoder(tf.Module):
 
         self.model = tf.keras.Model(inputs=inputs_dict, outputs=output)
 
+    @tf.Module.with_name_scope
     def __call__(
         self, inputs, sequential_context_embeddings=None, training=False, cache=None
     ):
@@ -310,7 +311,8 @@ class VertexModel(tf.Module):
         logits = top_p_logits(logits, top_p)
         cat_dist = tfp.distributions.Categorical(logits=logits)
         return cat_dist
-
+    
+    @tf.Module.with_name_scope
     def __call__(self, batch, training=False):
         global_context, seq_context = self._prepare_context(batch)
         pred_dist = self._create_dist(
@@ -320,7 +322,8 @@ class VertexModel(tf.Module):
             training=training,
         )
         return pred_dist
-
+    
+    @tf.Module.with_name_scope
     def sample(
         self,
         num_samples,
@@ -585,6 +588,7 @@ class FaceModel(tf.Module):
         logits = top_p_logits(logits, top_p)
         return tfp.distributions.Categorical(logits=logits)
     
+    @tf.Module.with_name_scope
     def __call__(self, batch, training=False):
         vertex_embeddings, global_context, seq_context = self._prepare_context(batch, training=training)
         pred_dict = self._create_dist(
@@ -597,6 +601,7 @@ class FaceModel(tf.Module):
         )
         return pred_dict
     
+    @tf.Module.with_name_scope
     def sample(self,
                context,
                max_sample_length=None,

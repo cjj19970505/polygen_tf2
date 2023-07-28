@@ -67,7 +67,7 @@ vertex_model = modules.VertexModel(
 )
 
 face_model_dataset = data_utils.make_face_model_dataset(
-    synthetic_dataset ,apply_random_shift=False, shuffle_vertices=False
+    synthetic_dataset ,apply_random_shift=False, shuffle_vertices=True
 )
 face_model_dataset = face_model_dataset.repeat()
 face_model_dataset = face_model_dataset.padded_batch(
@@ -94,21 +94,6 @@ face_model = modules.FaceModel(
     decoder_cross_attention=True,
     use_discrete_vertex_embeddings=True,
 )
-
-# face_model_pred_dist = face_model(face_model_batch)
-# face_model_loss = -tf.reduce_sum(
-#     face_model_pred_dist.log_prob(face_model_batch["faces"])
-#     * face_model_batch["faces_mask"]
-# )
-# face_samples = face_model.sample(
-#     context=vertex_samples,
-#     max_sample_length=500,
-#     top_p=0.95,
-#     only_return_complete=False,
-# )
-# print(face_model_batch)
-# print(face_model_pred_dist)
-# print(face_samples)
 
 learning_rate = 5e-4
 training_steps = 500
