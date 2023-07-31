@@ -6,7 +6,7 @@ from itertools import chain
 from tqdm import tqdm
 from datetime import datetime
 
-tf.config.run_functions_eagerly(True)
+# tf.config.run_functions_eagerly(True)
 # tf.data.experimental.enable_debug_mode()
 
 log_dir = "logs/" + datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -143,9 +143,25 @@ pbar = tqdm(total=training_steps)
 for vertex_model_batch, face_model_batch, step in zip(
     vertex_model_dataset, face_model_dataset, range(training_steps)
 ):
+    # if step == 0:
+    #     tf.summary.trace_on(graph=True, profiler=False)
+    #     vertex_model(vertex_model_batch, training=True)
+    #     with file_writer.as_default():
+    #         tf.summary.trace_export(name="vertex_model", step=0)
+    #     tf.summary.trace_off()
+    #     tf.summary.trace_on(graph=True, profiler=False)
+    #     face_model(face_model_batch, training=True)
+    #     with file_writer.as_default():
+    #         tf.summary.trace_export(name="face_model", step=0)
+
+    if step == 0:
+        tf.summary.trace_on(graph=True, profiler=False)
     vertex_model_loss, face_model_loss = train_step(
         vertex_model_batch, face_model_batch, optimizer
     )
+    if step == 0:
+        tf.summary.trace_export(name="train_step", step=0)
+        tf.summary.trace_off()
 
     with file_writer.as_default():
         tf.summary.scalar("vertex_model_loss", vertex_model_loss, step=step)

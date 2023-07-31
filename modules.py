@@ -5,12 +5,17 @@ import numpy as np
 import data_utils
 import os
 
+class ReZeroLayer(tf.keras.layers.Layer):
+    def build(self, input_shape):
+        self.alpha = self.add_weight('alpha', initializer=tf.keras.initializers.Constant(0.0))
 
-class TransformerDecoder(tf.Module):
+    def call(self, inputs):
+        return inputs * self.alpha
+
+class TransformerDecoder(tf.keras.layers.Layer):
     def __init__(
         self,
-        inputs_dim,
-        context_dim=None,  # None if no sequantial context
+        has_sequential_context=False,  # None if no sequantial context
         hidden_size=256,
         fc_size=1024,
         num_heads=4,
@@ -18,10 +23,9 @@ class TransformerDecoder(tf.Module):
         num_layers=8,
         dropout_rate=0.2,
         re_zero=True,
-        memory_efficient=False,
         name="transformer_decoder",
     ):
-        super().__init__(name)
+        super().__init__(name=name)
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.layer_norm = layer_norm
@@ -29,89 +33,179 @@ class TransformerDecoder(tf.Module):
         self.num_layers = num_layers
         self.dropout_rate = dropout_rate
         self.re_zero = re_zero
-        self.memory_efficient = memory_efficient
 
-        inputs = tf.keras.Input([None, inputs_dim], dtype=tf.float32)
-        if context_dim is not None:
-            sequential_context_embeddings = tf.keras.Input(
-                [None, context_dim], dtype=tf.float32
-            )
-        else:
-            sequential_context_embeddings = None
-
-        x = inputs
+        
+        self.attention_layers = []
         for layer_num in range(self.num_layers):
+            self.attention_layers.append({})
+            
             # Multihead self-attention
-            res = x
-            if self.memory_efficient:
-                # TODO
-                pass
-            else:
-                if self.layer_norm:
-                    res = tf.keras.layers.LayerNormalization()(res)
-                res = tf.keras.layers.MultiHeadAttention(
-                    num_heads=self.num_heads,
-                    key_dim=self.hidden_size // self.num_heads,
-                    value_dim=self.hidden_size // self.num_heads,
-                    output_shape=tf.TensorShape([self.hidden_size]),
-                )(query=res, value=res, use_causal_mask=True)
-                if self.re_zero:
-                    # TODO
-                    pass
-                if dropout_rate:
-                    res = tf.keras.layers.Dropout(rate=dropout_rate)(res)
-                x += res
+            sublayers = []
+            if self.layer_norm:
+                sublayers.append(tf.keras.layers.LayerNormalization(name='self_attention'))
+            sublayers.append(tf.keras.layers.MultiHeadAttention(
+                num_heads=self.num_heads,
+                key_dim=self.hidden_size // self.num_heads,
+                value_dim=self.hidden_size // self.num_heads,
+                output_shape=tf.TensorShape([self.hidden_size]),
+                name='self_attention',
+            ))
+            if self.re_zero:
+                sublayers.append(ReZeroLayer(name='self_attention'))
+            if dropout_rate:
+                sublayers.append(tf.keras.layers.Dropout(rate=dropout_rate))
+            self.attention_layers[layer_num]['self_attention_layers'] = sublayers
 
             # Optional cross attention into sequential context
-            if sequential_context_embeddings is not None:
-                res = x
+            sublayers = []
+            if has_sequential_context:
                 if self.layer_norm:
-                    res = tf.keras.layers.LayerNormalization()(res)
-                res = tf.keras.layers.MultiHeadAttention(
+                    sublayers.append(tf.keras.layers.LayerNormalization(name='cross_attention'))
+                sublayers.append(tf.keras.layers.MultiHeadAttention(
                     num_heads=self.num_heads,
                     key_dim=self.hidden_size // self.num_heads,
                     value_dim=self.hidden_size // self.num_heads,
                     output_shape=tf.TensorShape([self.hidden_size]),
-                )(query=res, value=sequential_context_embeddings)
+                    name='cross_attention'
+                ))
                 if self.re_zero:
-                    # TODO
-                    pass
+                    sublayers.append(ReZeroLayer(name='cross_attention'))
                 if dropout_rate:
-                    res = tf.keras.layers.Dropout(rate=dropout_rate)(res)
-                x += res
+                    sublayers.append(tf.keras.layers.Dropout(rate=dropout_rate))
+                self.attention_layers[layer_num]['cross_attention_layers'] = sublayers
 
             # FC layers
-            res = x
+            sublayers = []
             if self.layer_norm:
-                res = tf.keras.layers.LayerNormalization()(res)
-            res = tf.keras.layers.Dense(units=self.fc_size, activation="relu")(res)
-            res = tf.keras.layers.Dense(units=self.hidden_size)(res)
+                sublayers.append(tf.keras.layers.LayerNormalization(name='fc'))
+            sublayers.append(tf.keras.layers.Dense(units=self.fc_size, activation="relu", name='fc_1'))
+            sublayers.append(tf.keras.layers.Dense(units=self.hidden_size, name='fc_2'))
             if self.re_zero:
-                # TODO
-                pass
+                sublayers.append(ReZeroLayer(name='fc'))
             if dropout_rate:
-                res = tf.keras.layers.Dropout(rate=dropout_rate)(res)
-            x += res
+                sublayers.append(tf.keras.layers.Dropout(rate=dropout_rate))
 
+            self.attention_layers[layer_num]['fc_layers'] = sublayers
+
+        self.post_attention_layers = []
         if self.layer_norm:
-            output = tf.keras.layers.LayerNormalization()(x)
+            self.output_layer = tf.keras.layers.LayerNormalization(name='output')
         else:
-            output = x
-
-        inputs_dict = {"inputs": inputs}
-        if sequential_context_embeddings is not None:
-            inputs_dict["sequential_context_embeddings"] = sequential_context_embeddings
-
-        self.model = tf.keras.Model(inputs=inputs_dict, outputs=output)
-
-    @tf.Module.with_name_scope
-    def __call__(
-        self, inputs, sequential_context_embeddings=None, training=False, cache=None
+            self.output_layer = tf.keras.layers.Identity(name='output')
+    
+    # TODO
+    # handle masks
+    def call(
+        self, inputs,sequential_context_embeddings=None, training=False
     ):
-        inputs_dict = {"inputs": inputs}
-        if sequential_context_embeddings is not None:
-            inputs_dict["sequential_context_embeddings"] = sequential_context_embeddings
-        return self.model(inputs_dict, training=training)
+        x = inputs
+        for (layer_ind, layers) in enumerate(self.attention_layers):
+            with tf.name_scope("layer_{}".format(layer_ind)):
+                res = x
+                for layer in layers['self_attention_layers']:
+                    if type(layer) == tf.keras.layers.MultiHeadAttention:
+                        res = layer(res, value=res, training=training, use_causal_mask=True)
+                    else:
+                        res = layer(res, training=training)
+                x += res
+                res = x
+                if 'cross_attention_layers' in layers:
+                    for layer in layers['cross_attention_layers']:
+                        if type(layer) == tf.keras.layers.MultiHeadAttention:
+                            res = layer(res, value=sequential_context_embeddings, training=training)
+                        else:
+                            res = layer(res, training=training)
+                    x += res
+                res = x
+                for layer in layers['fc_layers']:
+                    res = layer(res, training=training)
+                x += res
+        x = self.output_layer(x)
+        return x
+
+class TransformerEncoder(tf.keras.layers.Layer):
+    def __init__(
+        self,
+        hidden_size=256,
+        fc_size=1024,
+        num_heads=4,
+        layer_norm=True,
+        num_layers=8,
+        dropout_rate=0.2,
+        re_zero=True,
+        name="transformer_encoder",
+    ):
+        super().__init__(name=name)
+        self.hidden_size = hidden_size
+        self.num_heads = num_heads
+        self.layer_norm = layer_norm
+        self.fc_size = fc_size
+        self.num_layers = num_layers
+        self.dropout_rate = dropout_rate
+        self.re_zero = re_zero
+
+        
+        self.attention_layers = []
+        for layer_num in range(self.num_layers):
+            self.attention_layers.append({})
+            
+            # Multihead self-attention
+            sublayers = []
+            if self.layer_norm:
+                sublayers.append(tf.keras.layers.LayerNormalization(name='self_attention'))
+            sublayers.append(tf.keras.layers.MultiHeadAttention(
+                num_heads=self.num_heads,
+                key_dim=self.hidden_size // self.num_heads,
+                value_dim=self.hidden_size // self.num_heads,
+                output_shape=tf.TensorShape([self.hidden_size]),
+                name='self_attention'
+            ))
+            if self.re_zero:
+                sublayers.append(ReZeroLayer(name='self_attention'))
+            if dropout_rate:
+                sublayers.append(tf.keras.layers.Dropout(rate=dropout_rate))
+            self.attention_layers[layer_num]['self_attention_layers'] = sublayers
+
+            # FC layers
+            sublayers = []
+            if self.layer_norm:
+                sublayers.append(tf.keras.layers.LayerNormalization(name='fc'))
+            sublayers.append(tf.keras.layers.Dense(units=self.fc_size, activation="relu", name='fc_1'))
+            sublayers.append(tf.keras.layers.Dense(units=self.hidden_size, name='fc_2'))
+            if self.re_zero:
+                sublayers.append(ReZeroLayer(name='fc'))
+            if dropout_rate:
+                sublayers.append(tf.keras.layers.Dropout(rate=dropout_rate))
+
+            self.attention_layers[layer_num]['fc_layers'] = sublayers
+
+        self.post_attention_layers = []
+        if self.layer_norm:
+            self.output_layer = tf.keras.layers.LayerNormalization(name='output')
+        else:
+            self.output_layer = tf.keras.layers.Identity(name='output')
+    
+    # TODO
+    # handle masks
+    def call(
+        self, inputs, training=False
+    ):
+        x = inputs
+        for (layer_ind, layers) in enumerate(self.attention_layers):
+            with tf.name_scope("layer_{}".format(layer_ind)):
+                res = x
+                for layer in layers['self_attention_layers']:
+                    if type(layer) == tf.keras.layers.MultiHeadAttention:
+                        res = layer(res, value=res, training=training)
+                    else:
+                        res = layer(res, training=training)
+                x += res
+                res = x
+                for layer in layers['fc_layers']:
+                    res = layer(res, training=training)
+                x += res
+        x = self.output_layer(x)
+        return x
 
 
 def dequantize_verts(verts, n_bits, add_noise=False):
@@ -193,7 +287,7 @@ class VertexModel(tf.Module):
         self.quantization_bits = quantization_bits
         self.use_discrete_embeddings = use_discrete_embeddings
 
-        self.decoder = TransformerDecoder(inputs_dim=self.embedding_dim ,**decoder_config)
+        self.decoder = TransformerDecoder(**decoder_config)
 
         # Prepare context:
         if self.class_conditional:
@@ -232,10 +326,11 @@ class VertexModel(tf.Module):
             )
 
         if self.global_context_embedding_layer is None:
-            self.zero_embed = tf.Variable(
-                tf.keras.initializers.GlorotUniform()(shape=[1, 1, self.embedding_dim]),
-                name="embed_zero",
-            )
+            with self.name_scope:
+                self.zero_embed = tf.Variable(
+                    tf.keras.initializers.GlorotUniform()(shape=[1, 1, self.embedding_dim]),
+                    name="embed_zero",
+                )
 
         self.project_to_logits = tf.keras.layers.Dense(
             2**self.quantization_bits + 1,
@@ -301,8 +396,7 @@ class VertexModel(tf.Module):
         outputs = self.decoder(
             decoder_inputs,
             sequential_context_embeddings=sequential_context_embeddings,
-            training=training,
-            cache=None,
+            training=training
         )
 
         logits = self.project_to_logits(outputs)
@@ -470,14 +564,15 @@ class FaceModel(tf.Module):
                 name='vertex_embeddings'
             )
 
-        self.stopping_embeddings = tf.Variable(
-            initial_value=tf.keras.initializers.GlorotUniform()(shape=[1, 2, self.embedding_dim]),
-            name="stopping_embeddings"
-        )
+        with self.name_scope:
+            self.stopping_embeddings = tf.Variable(
+                initial_value=tf.keras.initializers.GlorotUniform()(shape=[1, 2, self.embedding_dim]),
+                name="stopping_embeddings"
+            )
 
         # inputs_dim here is the dim of vertices embeddings
-        self.decoder = TransformerDecoder(inputs_dim=self.embedding_dim, **decoder_config)
-        self.encoder = TransformerDecoder(inputs_dim=self.embedding_dim, **encoder_config)
+        self.decoder = TransformerDecoder(has_sequential_context=self.decoder_cross_attention ,**decoder_config)
+        self.encoder = TransformerEncoder(**encoder_config)
 
         # Input embeddings
 
@@ -495,10 +590,11 @@ class FaceModel(tf.Module):
         )
 
         if not self.class_conditional:
-            self.zero_embed = tf.Variable(
-                tf.keras.initializers.GlorotUniform()(shape=[1, 1, self.embedding_dim]),
-                name="embed_zero"
-            )
+            with self.name_scope:
+                self.zero_embed = tf.Variable(
+                    tf.keras.initializers.GlorotUniform()(shape=[1, 1, self.embedding_dim]),
+                    name="embed_zero"
+                )
             
 
     def _embed_vertices(self, vertices, vertices_mask, training=False):
