@@ -6,10 +6,10 @@ from itertools import chain
 from tqdm import tqdm
 from datetime import datetime
 
-# tf.config.run_functions_eagerly(True)
+tf.config.run_functions_eagerly(True)
 # tf.data.experimental.enable_debug_mode()
 
-log_dir = "logs/" + datetime.now().strftime("%Y%m%d-%H%M%S")
+log_dir = "logs/training/" + datetime.now().strftime("%Y%m%d-%H%M%S")
 file_writer = tf.summary.create_file_writer(log_dir)
 
 # Prepare synthetic dataset
@@ -59,6 +59,7 @@ vertex_model = modules.VertexModel(
         "fc_size": 512,
         "num_layers": 3,
         "dropout_rate": 0.0,
+        "memory_efficient": True
     },
     class_conditional=True,
     num_classes=4,
@@ -81,12 +82,14 @@ face_model = modules.FaceModel(
         "fc_size": 512,
         "num_layers": 3,
         "dropout_rate": 0.0,
+        "memory_efficient": True
     },
     decoder_config={
         "hidden_size": 128,
         "fc_size": 512,
         "num_layers": 3,
         "dropout_rate": 0.0,
+        "memory_efficient": True
     },
     class_conditional=False,
     max_seq_length=500,
@@ -100,8 +103,6 @@ training_steps = 500
 check_step = 50
 
 optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
-
-# optimizer.build(vertex_model.trainable_variables + face_model.trainable_variables)
 
 
 @tf.function
@@ -139,37 +140,8 @@ def train_step(vertex_model_batch, face_model_batch, optimizer):
     return vertex_model_loss, face_model_loss
 
 
-pbar = tqdm(total=training_steps)
-for vertex_model_batch, face_model_batch, step in zip(
-    vertex_model_dataset, face_model_dataset, range(training_steps)
-):
-    # if step == 0:
-    #     tf.summary.trace_on(graph=True, profiler=False)
-    #     vertex_model(vertex_model_batch, training=True)
-    #     with file_writer.as_default():
-    #         tf.summary.trace_export(name="vertex_model", step=0)
-    #     tf.summary.trace_off()
-    #     tf.summary.trace_on(graph=True, profiler=False)
-    #     face_model(face_model_batch, training=True)
-    #     with file_writer.as_default():
-    #         tf.summary.trace_export(name="face_model", step=0)
-
-    if step == 0:
-        tf.summary.trace_on(graph=True, profiler=False)
-    vertex_model_loss, face_model_loss = train_step(
-        vertex_model_batch, face_model_batch, optimizer
-    )
-    if step == 0:
-        tf.summary.trace_export(name="train_step", step=0)
-        tf.summary.trace_off()
-
-    with file_writer.as_default():
-        tf.summary.scalar("vertex_model_loss", vertex_model_loss, step=step)
-        tf.summary.scalar("face_model_loss", face_model_loss, step=step)
-
-    if step % check_step == 0 or step + 1 == training_steps:
-
-        vertex_samples = vertex_model.sample(
+def sample(vertex_model_batch):
+    vertex_samples = vertex_model.sample(
             4,
             context=vertex_model_batch,
             max_sample_length=200,
@@ -177,13 +149,31 @@ for vertex_model_batch, face_model_batch, step in zip(
             recenter_verts=False,
             only_return_complete=False,
         )
-
-        face_samples = face_model.sample(
+    
+    face_samples = face_model.sample(
             context=vertex_samples,
             max_sample_length=500,
             top_p=0.95,
             only_return_complete=False,
         )
+    
+    return vertex_samples, face_samples
+
+pbar = tqdm(total=training_steps)
+for vertex_model_batch, face_model_batch, step in zip(
+    vertex_model_dataset, face_model_dataset, range(training_steps)
+):
+    vertex_model_loss, face_model_loss = train_step(
+        vertex_model_batch, face_model_batch, optimizer
+    )
+
+    with file_writer.as_default():
+        tf.summary.scalar("vertex_model_loss", vertex_model_loss, step=step)
+        tf.summary.scalar("face_model_loss", face_model_loss, step=step)
+
+    if step % check_step == 0 or step + 1 == training_steps:
+
+        vertex_samples, face_samples = sample(vertex_model_batch)
 
         mesh_list = []
         for n in range(4):
