@@ -492,7 +492,8 @@ class VertexModel(tf.Module):
         embeddings = tf.concat([zero_embed_tiled, embeddings], axis=1)
 
         return embeddings
-
+    
+    @tf.function
     def _create_dist(
         self,
         vertices,
@@ -788,7 +789,8 @@ class FaceModel(tf.Module):
         embeddings = tf.concat([zero_embed_tiled, embeddings], axis=1)
 
         return embeddings
-
+    
+    @tf.function
     def _create_dist(
         self,
         vertex_embeddings,
